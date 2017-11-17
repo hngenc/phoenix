@@ -1,9 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-
 #ifndef msr_airlib_SimpleImu_hpp
 #define msr_airlib_SimpleImu_hpp
+
+#include <random>
 
 #include "common/Common.hpp"
 #include "ImuSimpleParams.hpp"
@@ -19,6 +20,16 @@ public:
     {
         gyro_bias_stability_norm = params_.gyro.bias_stability / sqrt(params_.gyro.tau);
         accel_bias_stability_norm = params_.accel.bias_stability / sqrt(params_.accel.tau);
+
+		float mean, std;
+
+		Settings & settings = Settings::singleton();
+
+		mean = settings.getFloat("IMU_mean", 0.0f);
+		std = settings.getFloat("IMU_std", 1.0f);
+
+		gauss_dist = RandomVectorGaussianR(mean, std);
+		distribution = std::normal_distribution<float>(mean, std);
     }
 
     //*** Start: UpdatableState implementation ***//
@@ -59,13 +70,12 @@ private: //methods
             ground_truth.kinematics->pose.orientation, true);
 
         //add noise
-        addNoise(output.linear_acceleration, output.angular_velocity);
-        // TODO: Add noise in orientation?
+        addNoise(output.linear_acceleration, output.angular_velocity, output.orientation);
 
         setOutput(output);
     }
 
-    void addNoise(Vector3r& linear_acceleration, Vector3r& angular_velocity)
+    void addNoise(Vector3r& linear_acceleration, Vector3r& angular_velocity, Quaternionr& orientation)
     {
         TTimeDelta dt = clock()->updateSince(last_time_);
 
@@ -89,12 +99,25 @@ private: //methods
         //update bias random walk
         real_T accel_sigma_bias = accel_bias_stability_norm * sqrt_dt;
         state_.accelerometer_bias += gauss_dist.next() * accel_sigma_bias;
+
+		// orientation: TODO: REAL RESEARCH NEEDED
+		// orientation now pulls from ground truth, but IRL IMUs
+		// use the gyroscope and accelerometer data (and magnetometer)
+		// Probably the controller doesn't use orientation
+		Eigen::Quaternionf::Scalar x = orientation.x() + distribution(generator);
+		Eigen::Quaternionf::Scalar y = orientation.y() + distribution(generator);
+		Eigen::Quaternionf::Scalar z = orientation.z() + distribution(generator);
+		Eigen::Quaternionf::Scalar w = orientation.w() + distribution(generator);
+		Quaternionr orient_noisy = Quaternionr(x, y, z, w);
+		orientation = orient_noisy;
     }
 
 
 private: //fields
     ImuSimpleParams params_;
     RandomVectorGaussianR gauss_dist = RandomVectorGaussianR(0, 1);
+	std::default_random_engine generator;
+	std::normal_distribution<float> distribution;
 
     //cached calculated values
     real_T gyro_bias_stability_norm, accel_bias_stability_norm;
@@ -105,6 +128,7 @@ private: //fields
     } state_;
 
     TTimePoint last_time_;
+
 };
 
 
